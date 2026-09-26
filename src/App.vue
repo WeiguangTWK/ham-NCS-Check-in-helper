@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, toRaw, watch } from 'vue'
 import {
   BookOpen,
   Download,
@@ -748,9 +748,8 @@ const duplicateCallsign = computed(() => {
 
 const profileByCallsign = computed(() => {
   const map = new Map()
-  profiles.value.forEach((profile) => {
-    const normalized = normalizeProfile(profile)
-    if (normalized.callsign) map.set(normalized.callsign, normalized)
+  toRaw(profiles.value).forEach((profile) => {
+    if (profile.callsign) map.set(profile.callsign, profile)
   })
   sortedRecords.value.forEach((record) => {
     if (record.callsign) map.set(record.callsign, mergeProfileEntry(map.get(record.callsign), record))
@@ -1187,7 +1186,7 @@ const persist = () => {
 }
 
 const persistProfiles = () => {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(profiles.value))
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(toRaw(profiles.value)))
 }
 
 const persistDirtyProfiles = () => {
@@ -1424,14 +1423,12 @@ const mergeProfileEntry = (baseProfile, entry, { preferIncoming = true } = {}) =
 const updateProfile = (record, { markDirty = true } = {}) => {
   const callsign = normalizeCallsign(record.callsign || '')
   if (!callsign) return
-  const profileMap = new Map(
-    profiles.value
-      .map(normalizeProfile)
-      .filter((profile) => profile.callsign)
-      .map((profile) => [profile.callsign, profile])
-  )
-  profileMap.set(callsign, mergeProfileEntry(profileMap.get(callsign), record))
-  profiles.value = [...profileMap.values()]
+  const nextProfiles = [...toRaw(profiles.value)]
+  const index = nextProfiles.findIndex((profile) => profile.callsign === callsign)
+  const merged = mergeProfileEntry(index >= 0 ? nextProfiles[index] : null, record)
+  if (index >= 0) nextProfiles[index] = merged
+  else nextProfiles.push(merged)
+  profiles.value = nextProfiles
   if (markDirty) {
     markProfileDirty([callsign])
     scheduleSharedProfileSync()
@@ -1454,7 +1451,9 @@ const mergeProfiles = (nextProfiles, options = {}) => {
 
 const markProfileDirty = (callsigns) => {
   const next = new Set(dirtyProfileCallsigns.value)
+  const previousSize = next.size
   callsigns.map(normalizeCallsign).filter(Boolean).forEach((callsign) => next.add(callsign))
+  if (next.size === previousSize) return
   dirtyProfileCallsigns.value = [...next]
   persistDirtyProfiles()
 }
@@ -1750,13 +1749,13 @@ const enableLocalBaseProfilesForTesting = () => {
 }
 
 const getProfileStatsSnapshot = () => {
-  const normalizedProfiles = profiles.value.map(normalizeProfile).filter((profile) => profile.callsign)
   const callsigns = new Set()
   const qths = new Set()
   const devices = new Set()
   let historyEntries = 0
 
-  normalizedProfiles.forEach((profile) => {
+  toRaw(profiles.value).forEach((profile) => {
+    if (!profile.callsign) return
     callsigns.add(profile.callsign)
     profileFields.forEach((key) => {
       const values = uniqueRecentValues([profile[key], ...(profile.history?.[key] || [])], 100)
@@ -3241,7 +3240,7 @@ watch(
   },
   { deep: true }
 )
-watch(profiles, persistProfiles, { deep: true })
+watch(profiles, persistProfiles)
 watch(profileSyncConfig, persistProfileSyncConfig, { deep: true })
 watch(fmoConfig, persistFmoConfig, { deep: true })
 watch(
