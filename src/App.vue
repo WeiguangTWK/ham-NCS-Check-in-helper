@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, toRaw, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, toRaw, triggerRef, watch } from 'vue'
 import {
   BookOpen,
   Download,
@@ -19,9 +19,6 @@ import {
   Wifi
 } from '@lucide/vue'
 import ExcelJS from 'exceljs'
-import initSqlJs from 'sql.js'
-import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
-import { pinyin } from 'pinyin-pro'
 import {
   FmoClient,
   FmoEventsClient,
@@ -34,6 +31,7 @@ import { gridToAddressText, isMaidenheadGrid } from './services/gridAddress'
 import { fetchHamboxLastHeard } from './services/hamboxClient'
 import { localizeBmQth } from './services/localizedAddress'
 import { fetchMmdvmLastHeard } from './services/mmdvmClient'
+import { loadStoredProfiles, putStoredProfile, replaceStoredProfiles } from './services/profileStore'
 
 const STORAGE_KEY = 'ham-net-checkin-records-v1'
 const PROFILE_KEY = 'ham-net-checkin-profiles-v1'
@@ -368,7 +366,7 @@ const emptyForm = () => ({
 })
 
 const records = ref([])
-const profiles = ref([])
+const profiles = shallowRef([])
 const dirtyProfileCallsigns = ref([])
 const form = reactive(emptyForm())
 const editingId = ref(null)
@@ -755,27 +753,37 @@ const duplicateCallsign = computed(() => {
   return records.value.some((record) => record.callsign === callsign && record.id !== editingId.value)
 })
 
-const profileByCallsign = computed(() => {
-  const map = new Map()
-  toRaw(profiles.value).forEach((profile) => {
-    if (profile.callsign) map.set(profile.callsign, profile)
-  })
-  sortedRecords.value.forEach((record) => {
-    if (record.callsign) map.set(record.callsign, mergeProfileEntry(map.get(record.callsign), record))
-  })
-  return map
-})
+const profileByCallsign = shallowRef(new Map())
+const profilesByCoreCallsign = shallowRef(new Map())
 
-const profilesByCoreCallsign = computed(() => {
+const rebuildProfileLookup = () => {
+  const byCallsign = new Map(toRaw(profiles.value).map((profile) => [profile.callsign, profile]))
   const map = new Map()
-  for (const profile of profileByCallsign.value.values()) {
+  for (const profile of byCallsign.values()) {
     const core = getCoreCallsign(profile.callsign)
     if (!core) continue
     if (!map.has(core)) map.set(core, [])
     map.get(core).push(profile)
   }
-  return map
-})
+  profileByCallsign.value = byCallsign
+  profilesByCoreCallsign.value = map
+}
+
+const updateProfileLookup = (profile) => {
+  const previous = profileByCallsign.value.get(profile.callsign)
+  const core = getCoreCallsign(profile.callsign)
+  const group = profilesByCoreCallsign.value.get(core) || []
+  if (previous) {
+    const index = group.findIndex((item) => item.callsign === profile.callsign)
+    if (index >= 0) group[index] = profile
+  } else {
+    group.push(profile)
+  }
+  profilesByCoreCallsign.value.set(core, group)
+  profileByCallsign.value.set(profile.callsign, profile)
+  triggerRef(profilesByCoreCallsign)
+  triggerRef(profileByCallsign)
+}
 
 const currentProfile = computed(() => {
   const exactCallsign = buildRecordCallsign()
@@ -857,22 +865,46 @@ const collectKnownValues = (key) =>
     .map((value) => String(value).trim())
     .filter(Boolean)
 
-const allKnownValues = computed(() =>
-  Object.fromEntries(profileFields.map((key) => [key, collectKnownValues(key)]))
-)
+const allKnownValues = shallowRef(Object.fromEntries(profileFields.map((key) => [key, []])))
+const knownValueSets = Object.fromEntries(profileFields.map((key) => [key, new Set()]))
+const rebuildKnownValues = () => {
+  allKnownValues.value = Object.fromEntries(profileFields.map((key) => {
+    const values = uniqueRecentValues(collectKnownValues(key), Number.MAX_SAFE_INTEGER)
+    knownValueSets[key] = new Set(values)
+    return [key, values]
+  }))
+}
+const appendKnownValues = (profile) => {
+  let changed = false
+  for (const key of profileFields) {
+    const values = [profile[key], ...(profile.history?.[key] || [])].filter(Boolean)
+    for (const value of values) {
+      if (knownValueSets[key].has(value)) continue
+      knownValueSets[key].add(value)
+      allKnownValues.value[key].unshift(value)
+      changed = true
+    }
+  }
+  if (changed) triggerRef(allKnownValues)
+}
 
 const normalizeQthSearch = (value) => toHalfWidth(value).toLowerCase().replace(/\s+/g, '')
-const qthSearchIndex = computed(() => {
-  const values = allKnownValues.value.qth
-  const counts = new Map()
-  for (const value of values) counts.set(value, (counts.get(value) || 0) + 1)
-  return [...counts.keys()].map((value) => ({
-    value,
-    count: counts.get(value),
-    text: normalizeQthSearch(value),
-    initials: normalizeQthSearch(pinyin(value, { pattern: 'first', toneType: 'none', nonZh: 'removed', type: 'array' }).join('')),
-    full: normalizeQthSearch(pinyin(value, { toneType: 'none', nonZh: 'removed', type: 'array' }).join(''))
-  })).sort((a, b) => b.count - a.count)
+const qthSearchIndex = shallowRef([])
+let qthWorker
+const qthValuesForProfile = (profile) => [...new Set([profile.qth, ...(profile.history?.qth || [])].filter(Boolean))]
+const getQthWorker = () => {
+  if (!qthWorker) {
+    qthWorker = new Worker(new URL('./workers/qthIndex.worker.js', import.meta.url), { type: 'module' })
+    qthWorker.onmessage = ({ data }) => { qthSearchIndex.value = data }
+  }
+  return qthWorker
+}
+const rebuildQthIndex = () => getQthWorker().postMessage({
+  type: 'replace',
+  profiles: toRaw(profiles.value).map((profile) => ({ callsign: profile.callsign, values: qthValuesForProfile(profile) }))
+})
+const updateQthIndex = (profile) => getQthWorker().postMessage({
+  type: 'put', callsign: profile.callsign, values: qthValuesForProfile(profile)
 })
 
 const qthSuggestions = computed(() => {
@@ -920,12 +952,11 @@ const handleQthSuggestionKeydown = (event) => {
 
 const filterValuesByInput = (values, keyword, limit = 24) => {
   const normalizedKeyword = toHalfWidth(keyword).toLowerCase().replace(/\s+/g, '')
-  const uniqueValues = uniqueRecentValues(values, values.length || limit)
   const filtered = normalizedKeyword
-    ? uniqueValues.filter((value) =>
+    ? values.filter((value) =>
         toHalfWidth(value).toLowerCase().replace(/\s+/g, '').includes(normalizedKeyword)
       )
-    : uniqueValues
+    : values
   return filtered.slice(0, limit)
 }
 
@@ -938,10 +969,21 @@ const collectKnownCallsigns = () =>
     .map(getCoreCallsign)
     .filter(Boolean)
 
-const allKnownCallsigns = computed(() => {
+const allKnownCallsigns = shallowRef([])
+const knownCallsignSet = new Set()
+const rebuildKnownCallsigns = () => {
   const callsigns = collectKnownCallsigns()
-  return uniqueRecentValues(callsigns, callsigns.length || 400)
-})
+  allKnownCallsigns.value = uniqueRecentValues(callsigns, callsigns.length || 400)
+  knownCallsignSet.clear()
+  allKnownCallsigns.value.forEach((callsign) => knownCallsignSet.add(callsign))
+}
+const addKnownCallsign = (callsign) => {
+  const core = getCoreCallsign(callsign)
+  if (!core || knownCallsignSet.has(core)) return
+  knownCallsignSet.add(core)
+  allKnownCallsigns.value.unshift(core)
+  triggerRef(allKnownCallsigns)
+}
 
 const callsignSuggestions = computed(() => {
   const keyword = toHalfWidth(form.callsign).toUpperCase().replace(/\s+/g, '')
@@ -1194,8 +1236,23 @@ const persist = () => {
   localStorage.setItem(scopedKey(STORAGE_KEY), JSON.stringify(records.value))
 }
 
+let profileWriteQueue = Promise.resolve()
+let profileStorageAvailable = true
+const queueProfileWrite = (write) => {
+  profileWriteQueue = profileWriteQueue.then(write).catch((error) => {
+    profileStorageAvailable = false
+    console.error('Profile storage failed', error)
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(toRaw(profiles.value)))
+  })
+  return profileWriteQueue
+}
+const persistProfile = (profile) => {
+  if (profileStorageAvailable) queueProfileWrite(() => putStoredProfile(profile))
+  else localStorage.setItem(PROFILE_KEY, JSON.stringify(toRaw(profiles.value)))
+}
 const persistProfiles = () => {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(toRaw(profiles.value)))
+  if (profileStorageAvailable) queueProfileWrite(() => replaceStoredProfiles(toRaw(profiles.value)))
+  else localStorage.setItem(PROFILE_KEY, JSON.stringify(toRaw(profiles.value)))
 }
 
 const persistDirtyProfiles = () => {
@@ -1223,12 +1280,45 @@ const loadRecords = () => {
   }
 }
 
-const loadProfiles = () => {
+const loadProfiles = async () => {
   try {
-    const saved = JSON.parse(localStorage.getItem(PROFILE_KEY) || '[]')
-    profiles.value = Array.isArray(saved) ? saved.map(normalizeProfile).filter((profile) => profile.callsign) : []
-  } catch {
-    profiles.value = []
+    const stored = await loadStoredProfiles()
+    const legacy = localStorage.getItem(PROFILE_KEY)
+    if (stored.length) {
+      const byCallsign = new Map(stored.map(normalizeProfile).filter((profile) => profile.callsign).map((profile) => [profile.callsign, profile]))
+      if (legacy) {
+        const saved = JSON.parse(legacy)
+        if (Array.isArray(saved)) for (const source of saved) {
+          const profile = normalizeProfile(source)
+          const previous = byCallsign.get(profile.callsign)
+          if (profile.callsign && (!previous || profile.updatedAt > previous.updatedAt)) byCallsign.set(profile.callsign, profile)
+        }
+        await replaceStoredProfiles([...byCallsign.values()])
+      }
+      profiles.value = [...byCallsign.values()]
+    } else if (legacy) {
+      const saved = JSON.parse(legacy)
+      profiles.value = Array.isArray(saved) ? saved.map(normalizeProfile).filter((profile) => profile.callsign) : []
+      await replaceStoredProfiles(toRaw(profiles.value))
+    }
+    if (legacy) localStorage.removeItem(PROFILE_KEY)
+    rebuildProfileLookup()
+    rebuildKnownValues()
+    rebuildKnownCallsigns()
+    rebuildQthIndex()
+  } catch (error) {
+    console.error('Profile storage unavailable, using local storage', error)
+    profileStorageAvailable = false
+    try {
+      const saved = JSON.parse(localStorage.getItem(PROFILE_KEY) || '[]')
+      profiles.value = Array.isArray(saved) ? saved.map(normalizeProfile).filter((profile) => profile.callsign) : []
+    } catch {
+      profiles.value = []
+    }
+    rebuildProfileLookup()
+    rebuildKnownValues()
+    rebuildKnownCallsigns()
+    rebuildQthIndex()
   }
 }
 
@@ -1438,6 +1528,11 @@ const updateProfile = (record, { markDirty = true } = {}) => {
   if (index >= 0) nextProfiles[index] = merged
   else nextProfiles.push(merged)
   profiles.value = nextProfiles
+  updateProfileLookup(merged)
+  appendKnownValues(merged)
+  addKnownCallsign(merged.callsign)
+  updateQthIndex(merged)
+  persistProfile(merged)
   if (markDirty) {
     markProfileDirty([callsign])
     scheduleSharedProfileSync()
@@ -1456,6 +1551,11 @@ const mergeProfiles = (nextProfiles, options = {}) => {
     if (callsign) profileMap.set(callsign, mergeProfileEntry(profileMap.get(callsign), profile, options))
   })
   profiles.value = [...profileMap.values()]
+  rebuildProfileLookup()
+  rebuildKnownValues()
+  rebuildKnownCallsigns()
+  rebuildQthIndex()
+  persistProfiles()
 }
 
 const markProfileDirty = (callsigns) => {
@@ -3162,16 +3262,19 @@ const importJson = async (event) => {
   }
 }
 
-const forEachDb3Row = (db, tableName, visit, orderBy = '') => {
-  const exists = db.exec(`select name from sqlite_master where type='table' and name='${tableName}'`)
-  if (!exists.length || !exists[0].values.length) return
-  const statement = db.prepare(`select * from ${tableName}${orderBy}`)
-  try {
-    while (statement.step()) visit(statement.getAsObject())
-  } finally {
-    statement.free()
+const readDb3InWorker = (buffer) => new Promise((resolve, reject) => {
+  const worker = new Worker(new URL('./workers/db3.worker.js', import.meta.url), { type: 'module' })
+  worker.onmessage = ({ data }) => {
+    worker.terminate()
+    if (data.error) reject(new Error(data.error))
+    else resolve(data)
   }
-}
+  worker.onerror = (event) => {
+    worker.terminate()
+    reject(new Error(event.message || 'DB3 worker failed'))
+  }
+  worker.postMessage({ buffer }, [buffer])
+})
 
 const rebuildProfileDatabase = async () => {
   if (databaseMaintenanceBusy.value) return
@@ -3188,8 +3291,13 @@ const rebuildProfileDatabase = async () => {
       profileMap.set(profile.callsign, existing ? mergeProfileEntry(existing, profile) : profile)
     }
     profiles.value = [...profileMap.values()]
+    rebuildProfileLookup()
+    rebuildKnownValues()
+    rebuildKnownCallsigns()
+    rebuildQthIndex()
+    persistProfiles()
     const indexedCallsigns = profileByCallsign.value.size
-    const indexedQths = qthSearchIndex.value.length
+    const indexedQths = new Set([...profileMap.values()].flatMap(qthValuesForProfile)).size
     databaseStatus.value = i18nText(
       `已整理 ${profileMap.size} 个呼号、${indexedQths} 个 QTH，耗时 ${Math.round(performance.now() - startedAt)} 毫秒`,
       `Rebuilt ${profileMap.size} callsigns and ${indexedQths} QTH values in ${Math.round(performance.now() - startedAt)} ms`
@@ -3211,9 +3319,8 @@ const importDb3 = async (event) => {
   databaseStatus.value = i18nText('正在导入 DB3…', 'Importing DB3…')
   try {
     const startedAt = performance.now()
-    const SQL = await initSqlJs({ locateFile: () => sqlWasmUrl })
     const buffer = await file.arrayBuffer()
-    const db = new SQL.Database(new Uint8Array(buffer))
+    const { qthRows, qsoRows } = await readDb3InWorker(buffer)
     const openedAt = performance.now()
     let importedCount = 0
     const importedCallsigns = new Set()
@@ -3229,11 +3336,13 @@ const importDb3 = async (event) => {
       profileMap.set(callsign, mergeProfileEntry(profileMap.get(callsign), profile))
       importedCallsigns.add(callsign)
     }
-    try {
-      forEachDb3Row(db, 'qth', (row) => {
-        addProfile({ callsign: row.callsign, qth: row.qth || '' })
-      })
-      forEachDb3Row(db, 'qsolog', (row) => {
+    for (let index = 0; index < qthRows.length; index += 1) {
+      const row = qthRows[index]
+      addProfile({ callsign: row.callsign, qth: row.qth || '' })
+      if (index % 250 === 249) await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+    for (let index = 0; index < qsoRows.length; index += 1) {
+      const row = qsoRows[index]
         importedCount += 1
         const rx = row.rst || ''
         const tx = row.rst1 || ''
@@ -3248,12 +3357,15 @@ const importDb3 = async (event) => {
           signal: rx || tx ? `RX ${rx || '-'} / TX ${tx || '-'}` : '',
           remarks: [row.linetype, row.lineother, row.op ? i18nText(`主控 ${row.op}`, `OP ${row.op}`) : '', row.fwq].filter(Boolean).join(' / ')
         })
-      }, ' order by ID')
-    } finally {
-      db.close()
+      if (index % 250 === 249) await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
     const mergedAt = performance.now()
     profiles.value = [...profileMap.values()]
+    rebuildProfileLookup()
+    rebuildKnownValues()
+    rebuildKnownCallsigns()
+    rebuildQthIndex()
+    persistProfiles()
     markProfileDirty([...importedCallsigns])
     scheduleSharedProfileSync()
     console.info('DB3 import timing', {
@@ -3284,7 +3396,6 @@ watch(
   },
   { deep: true }
 )
-watch(profiles, persistProfiles)
 watch(profileSyncConfig, persistProfileSyncConfig, { deep: true })
 watch(fmoConfig, persistFmoConfig, { deep: true })
 watch(
@@ -3355,12 +3466,12 @@ watch(
   }
 )
 
-onMounted(() => {
+onMounted(async () => {
   loadPublicSession()
   loadRecords()
   loadProfileSyncConfig()
   loadDirtyProfiles()
-  loadProfiles()
+  await loadProfiles()
   enableLocalBaseProfilesForTesting()
   if (!isLocalProfileTestMode() && profileSyncConfig.enabled) syncSharedProfiles({ silent: true })
   loadFmoConfig()
@@ -3387,6 +3498,7 @@ onUnmounted(() => {
   window.clearTimeout(profileSyncDebounceTimer.value)
   window.clearInterval(systemClockTimer.value)
   closeFmoClient()
+  qthWorker?.terminate()
 })
 </script>
 
