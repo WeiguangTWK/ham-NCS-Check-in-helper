@@ -1,6 +1,15 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import packageJson from './package.json' with { type: 'json' }
+import { execFileSync } from 'node:child_process'
+
+const resolveCommit = () => {
+  try {
+    return execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).trim()
+  } catch {
+    return process.env.GIT_COMMIT?.slice(0, 7) || 'unknown'
+  }
+}
 
 function splitSocketIoPayload(payload) {
   return String(payload || '')
@@ -196,7 +205,7 @@ function mmdvmProxyPlugin() {
 export default defineConfig({
   base: './',
   define: {
-    __APP_VERSION__: JSON.stringify(packageJson.version)
+    __APP_VERSION__: JSON.stringify(`${packageJson.version}-${resolveCommit()}`)
   },
   plugins: [vue(), mmdvmProxyPlugin()],
 })
