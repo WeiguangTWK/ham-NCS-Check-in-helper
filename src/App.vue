@@ -115,6 +115,7 @@ const i18nMessages = {
     searchRecords: '搜索已记录呼号、QTH、设备、备注',
     clearSearch: '清空搜索',
     exportExcel: '导出 Excel',
+    importDb3: '导入 DB3',
     selectAll: '全选',
     cancelSelect: '取消',
     deleteSelected: '删除选中',
@@ -222,6 +223,7 @@ const i18nMessages = {
     searchRecords: 'Search callsign, QTH, device, notes',
     clearSearch: 'Clear search',
     exportExcel: 'Export Excel',
+    importDb3: 'Import DB3',
     selectAll: 'Select All',
     cancelSelect: 'Cancel',
     deleteSelected: 'Delete selected',
@@ -3606,6 +3608,10 @@ onUnmounted(() => {
               <button type="button" class="tool-button" :title="t('exportExcel')" @click="exportExcel">
                 <FileSpreadsheet :size="18" />
                 <span>Excel</span>
+              </button>
+              <button type="button" class="tool-button" :title="t('importDb3')" @click="dbFileInput?.click()">
+                <Upload :size="18" />
+                <span>{{ t('importDb3') }}</span>
               </button>
               <button type="button" class="tool-button" :title="t('selectAll')" @click="toggleAllFilteredRecords">
                 <span>{{ allFilteredSelected ? t('cancelSelect') : t('selectAll') }}</span>
