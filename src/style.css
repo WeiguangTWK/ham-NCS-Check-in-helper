@@ -472,6 +472,36 @@ h2 {
   position: relative;
 }
 
+.qth-suggestions {
+  background: #fff;
+  border: 1px solid var(--line-dark);
+  border-radius: 6px;
+  bottom: calc(100% + 4px);
+  box-shadow: var(--shadow);
+  left: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  position: absolute;
+  right: 0;
+  z-index: 20;
+}
+
+.qth-suggestion {
+  background: #fff;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  display: block;
+  padding: 6px 9px;
+  text-align: left;
+  width: 100%;
+}
+
+.qth-suggestion:hover,
+.qth-suggestion.active {
+  background: #e9f4ff;
+}
+
 .clearable-input input {
   padding-right: 44px;
   width: 100%;

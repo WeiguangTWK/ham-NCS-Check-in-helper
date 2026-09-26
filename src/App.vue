@@ -21,6 +21,7 @@ import {
 import ExcelJS from 'exceljs'
 import initSqlJs from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
+import { pinyin } from 'pinyin-pro'
 import {
   FmoClient,
   FmoEventsClient,
@@ -366,6 +367,8 @@ const dirtyProfileCallsigns = ref([])
 const form = reactive(emptyForm())
 const editingId = ref(null)
 const searchText = ref('')
+const qthSuggestionsOpen = ref(false)
+const qthSuggestionIndex = ref(0)
 const selectedRecordIds = ref([])
 const recordEditorOpen = ref(false)
 const editingRecordId = ref('')
@@ -849,6 +852,63 @@ const collectKnownValues = (key) =>
 const allKnownValues = computed(() =>
   Object.fromEntries(profileFields.map((key) => [key, collectKnownValues(key)]))
 )
+
+const normalizeQthSearch = (value) => toHalfWidth(value).toLowerCase().replace(/\s+/g, '')
+const qthSearchIndex = computed(() => {
+  const values = allKnownValues.value.qth
+  const counts = new Map()
+  for (const value of values) counts.set(value, (counts.get(value) || 0) + 1)
+  return [...counts.keys()].map((value) => ({
+    value,
+    count: counts.get(value),
+    text: normalizeQthSearch(value),
+    initials: normalizeQthSearch(pinyin(value, { pattern: 'first', toneType: 'none', nonZh: 'removed', type: 'array' }).join('')),
+    full: normalizeQthSearch(pinyin(value, { toneType: 'none', nonZh: 'removed', type: 'array' }).join(''))
+  })).sort((a, b) => b.count - a.count)
+})
+
+const qthSuggestions = computed(() => {
+  const query = normalizeQthSearch(form.qth)
+  if (!query) return []
+  const matches = []
+  const seen = new Set()
+  for (const value of currentKnownValues.value.qth) {
+    const entry = qthSearchIndex.value.find((item) => item.value === value)
+    if (!entry) continue
+    if (entry.text.includes(query) || entry.initials.startsWith(query) || entry.full.startsWith(query)) {
+      matches.push(value)
+      seen.add(value)
+    }
+  }
+  for (const entry of qthSearchIndex.value) {
+    if (!seen.has(entry.value) && (entry.text.includes(query) || entry.initials.startsWith(query) || entry.full.startsWith(query))) {
+      matches.push(entry.value)
+      if (matches.length === 24) break
+    }
+  }
+  return matches
+})
+
+const chooseQthSuggestion = (value) => {
+  form.qth = value
+  qthSuggestionsOpen.value = false
+  qthSuggestionIndex.value = 0
+}
+
+const handleQthSuggestionKeydown = (event) => {
+  const suggestions = qthSuggestions.value
+  if (!qthSuggestionsOpen.value || !suggestions.length) return
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    const direction = event.key === 'ArrowDown' ? 1 : -1
+    qthSuggestionIndex.value = (qthSuggestionIndex.value + direction + suggestions.length) % suggestions.length
+  } else if (event.key === 'Enter') {
+    event.preventDefault()
+    chooseQthSuggestion(suggestions[qthSuggestionIndex.value] || suggestions[0])
+  } else if (event.key === 'Escape') {
+    qthSuggestionsOpen.value = false
+  }
+}
 
 const filterValuesByInput = (values, keyword, limit = 24) => {
   const normalizedKeyword = toHalfWidth(keyword).toLowerCase().replace(/\s+/g, '')
@@ -3493,7 +3553,15 @@ onUnmounted(() => {
             <label class="field">
               <span>QTH</span>
               <div class="clearable-input">
-                <input v-model="form.qth" list="qth-options" :placeholder="t('qthPlaceholder')" />
+                <input
+                  v-model="form.qth"
+                  :placeholder="t('qthPlaceholder')"
+                  autocomplete="off"
+                  @focus="qthSuggestionsOpen = true"
+                  @input="qthSuggestionsOpen = true; qthSuggestionIndex = 0"
+                  @blur="qthSuggestionsOpen = false"
+                  @keydown="handleQthSuggestionKeydown"
+                />
                 <button
                   type="button"
                   class="input-clear-button"
@@ -3503,6 +3571,19 @@ onUnmounted(() => {
                 >
                   X
                 </button>
+                <div v-if="qthSuggestionsOpen && qthSuggestions.length" class="qth-suggestions" role="listbox">
+                  <button
+                    v-for="(value, index) in qthSuggestions"
+                    :key="value"
+                    type="button"
+                    class="qth-suggestion"
+                    :class="{ active: index === qthSuggestionIndex }"
+                    role="option"
+                    :aria-selected="index === qthSuggestionIndex"
+                    @mousedown.prevent="chooseQthSuggestion(value)"
+                    @click.stop.prevent
+                  >{{ value }}</button>
+                </div>
               </div>
             </label>
             <label class="field">
@@ -3522,7 +3603,7 @@ onUnmounted(() => {
             </label>
           </div>
           <datalist id="qth-options">
-            <option v-for="value in searchableKnownValues.qth" :key="value" :value="value" />
+            <option v-for="value in knownValues.qth" :key="value" :value="value" />
           </datalist>
           <datalist id="device-options">
             <option v-for="value in searchableKnownValues.device" :key="value" :value="value" />
