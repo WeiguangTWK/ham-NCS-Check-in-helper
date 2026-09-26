@@ -1552,6 +1552,9 @@ const pullLocalBaseProfilesForTesting = async ({ silent = false } = {}) => {
   if (!profileSyncConfig.enabled) return null
   const response = await fetch('./data/profiles/base-profiles.json', { cache: 'no-store' })
   if (!response.ok) throw new Error(i18nText(`本地基础库加载失败：HTTP ${response.status}`, `Local base library failed: HTTP ${response.status}`))
+  if (!response.headers.get('content-type')?.includes('application/json')) {
+    throw new Error(i18nText('本地基础库文件缺失：data/profiles/base-profiles.json', 'Local base library file is missing: data/profiles/base-profiles.json'))
+  }
   const data = await response.json()
   const baseProfiles = Array.isArray(data.profiles) ? data.profiles : []
   if (baseProfiles.length) mergeProfiles(baseProfiles, { preferIncoming: false })
@@ -1625,7 +1628,11 @@ const syncSharedProfiles = async ({ silent = false } = {}) => {
     profileSyncStatus.value = i18nText(`共享 ${pulledCount} 条，新增 ${pushedCount} 条`, `Shared ${pulledCount}, added ${pushedCount}`)
     if (!silent) showNotice(i18nText('呼号数据库已同步', 'Callsign DB synced.'))
   } catch (error) {
-    profileSyncStatus.value = i18nText('共享库同步失败', 'Shared library sync failed')
+    if (isLocalProfileTestMode()) {
+      profileSyncConfig.enabled = false
+      persistProfileSyncConfig()
+    }
+    profileSyncStatus.value = error?.message || i18nText('共享库同步失败', 'Shared library sync failed')
     if (!silent) showNotice(error?.message || i18nText('共享库同步失败', 'Shared library sync failed'))
   } finally {
     profileSyncBusy.value = false
@@ -1658,7 +1665,9 @@ const enableLocalBaseProfilesForTesting = () => {
   persistProfileSyncConfig()
   pullLocalBaseProfilesForTesting({ silent: true }).catch((error) => {
     console.error(error)
-    profileSyncStatus.value = i18nText('本地测试基础库加载失败', 'Failed to load local test library')
+    profileSyncConfig.enabled = false
+    persistProfileSyncConfig()
+    profileSyncStatus.value = error?.message || i18nText('本地测试基础库加载失败', 'Failed to load local test library')
   })
 }
 

@@ -1739,6 +1739,10 @@ async function serveStatic(req, res) {
     res.writeHead(200, { 'content-type': mimeTypes[ext] || 'application/octet-stream' })
     createReadStream(file).pipe(res)
   } catch {
+    if (path.extname(pathname)) {
+      send(res, 404, 'Not Found')
+      return
+    }
     createReadStream(path.join(distDir, 'index.html'))
       .on('error', () => send(res, 404, 'Not Found'))
       .pipe(res)
