@@ -154,10 +154,9 @@ const i18nMessages = {
     registerHint: '提交后需等待作者在后台审核，通过后获得验证密钥文件。导入验证密钥后，即可开启共享呼号资料库同步。',
     aboutTitle: '关于台网点名主控台',
     aboutText1: '台网点名主控台用于业余无线电台网活动记录，支持从 FMO、MMDVM、HAMBOX、BM DMR 等监听源选取友台，快速登记呼号、QTH、设备、功率、模式和信号报告，并导出 Excel 台网日志。',
-    aboutText2: '本软件由 BH1JSS 机婶婶贡献。网络版仅提供 BM DMR 模式测试，完整监听和本地设备接入建议使用本地版。',
+    aboutText2: '本软件由 BH1JSS 机婶婶贡献, 改版由WeiguangTWK/BG7QWH完成。网络版仅提供 BM DMR 模式测试，完整监听和本地设备接入建议使用本地版。',
     githubProject: 'GitHub 项目',
-    contactAuthor: '联系作者',
-    footerCredit: '台网点名主控台 由 BH1JSS 机婶婶 贡献',
+    footerCredit: '台网点名主控台 由 BH1JSS 机婶婶 贡献, 改版由WeiguangTWK/BG7QWH完成',
     profileEnabled: '已启用呼号数据库',
     profileDisabled: '启用呼号数据库',
     languageNotice: '已切换到中文界面。',
@@ -267,7 +266,6 @@ const i18nMessages = {
     aboutText1: 'HAM Net Check-in Console helps the OP record amateur radio check-ins. It can pick candidates from FMO, MMDVM, HAMBOX and BM DMR, then export an Excel net log.',
     aboutText2: 'Contributed by BH1JSS. The web version is mainly for BM DMR testing. Use the desktop app for full local device monitoring.',
     githubProject: 'GitHub',
-    contactAuthor: 'Contact',
     footerCredit: 'HAM Net Check-in Console by BH1JSS',
     profileEnabled: 'Callsign DB enabled',
     profileDisabled: 'Enable callsign DB',
@@ -4282,15 +4280,12 @@ onUnmounted(() => {
           {{ t('aboutText2') }}
         </p>
         <div class="about-actions">
-          <a class="footer-link" href="https://github.com/54dashayu/ham-net-checkin" target="_blank" rel="noreferrer">
+          <a class="footer-link" href="https://github.com/WeiguangTWK/ham-NCS-Check-in-helper" target="_blank" rel="noreferrer">
             <svg aria-hidden="true" viewBox="0 0 19 19">
               <use :href="`${serverBasePath}/icons.svg#github-icon`"></use>
             </svg>
             {{ t('githubProject') }}
           </a>
-          <button type="button" class="tool-button" @click="authorQrOpen = true">
-            {{ t('contactAuthor') }}
-          </button>
         </div>
       </div>
     </div>
@@ -4502,7 +4497,7 @@ onUnmounted(() => {
         <Info :size="18" />
         {{ t('aboutTitle') }}
       </button>
-      <a class="footer-link" href="https://github.com/54dashayu/ham-net-checkin" target="_blank" rel="noreferrer">
+      <a class="footer-link" href="https://github.com/WeiguangTWK/ham-NCS-Check-in-helper" target="_blank" rel="noreferrer">
         <svg aria-hidden="true" viewBox="0 0 19 19">
           <use :href="`${serverBasePath}/icons.svg#github-icon`"></use>
         </svg>
