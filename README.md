@@ -1,47 +1,59 @@
-# HAM 台网点名记录台
+# HAM 台网点名主控台
 
-用于业余无线电台网点名活动的本地记录工具。主控可以现场记录呼号、时间、QTH、设备、天线、功率、频率、模式、信号报告和备注，并导出 Excel 可打开的表格文件。
+业余无线电台网活动的点名记录工具。主控可以手动登记友台，也可以从监听源的最近通联列表中选取候选，核对后加入点名表。活动记录可导出为 Excel 或 JSON。
 
-## 当前测试版
+## 功能
 
-V0.9.01 顶部增加主控天线字段，并将桌面工作台最小宽度调整到 1200px 左右，避免首行控件被过度压缩。主控发射提示逻辑已回溯到 V0.9 原机制。
+- 记录呼号、时间、QTH、设备、天线、功率、模式、信号报告和备注；支持编辑、搜索及调整起始序号。
+- 从 FMO、MMDVM、HAMBOX、BrandMeister DMR 读取通联候选。候选只填入表单，不会自行加入点名表。
+- 根据本地呼号档案补全历史资料；QTH 候选支持汉字和拼音首字母检索。
+- 导出 Excel 日志和当前点名记录的 JSON 备份。保存按钮和自动保存用于写入 Excel 文件。
+- 从旧版点名软件的 `.db3` 文件导入 `qth`、`qsolog` 表，生成呼号档案。
 
-本地 Web/VPS 包位于 `release/HAM台网点名主控台-0.9.01-web.tar.gz`，Win64 公网分发包位于 `release/actions-win64-v0.9.01-rollback/HAM-Checkin-0.9.01-Win64.zip`，macOS Developer ID 公证版位于 `release/macos-v0.9.01/HAM-Checkin-0.9.01-macOS-Universal-notarized.dmg`。
+共享呼号资料库同步需要先注册并导入验证密钥；本地点名和 DB3 导入无需启用它。
 
-## 当前功能
+## 开发运行
 
-- 台站点名录入：自动时间、呼号标准化、重复呼号提示。
-- 历史台站档案：保存记录时自动记住该呼号的 QTH、设备、天线、功率、频率、模式等信息。
-- 候选呼号：输入呼号片段时显示历史候选，一键套用历史资料。
-- 常用候选值：QTH、设备、天线输入框支持历史值下拉。
-- FMO 通联候选：添加 FMO 地址后读取正在通联/最近通联的 HAM 呼号、QTH/Grid、设备/备注等候选信息，主控点选抄收清楚的友台后再手动入表。
-- 记录管理：搜索、编辑、删除、清空本次记录。
-- 导出：生成 `.xlsx` 文件，可用 Excel/WPS 打开。
-- 备份：导出/导入本软件 JSON 备份。
-- 迁移：导入原 Windows 点名软件 `.db3`，读取 `qsolog`、`qth` 等表生成记录和历史档案。
-
-
-## 开发
+需要 Node.js 和 npm。在项目目录执行：
 
 ```bash
-npm install
+npm ci
 npm run dev
+```
+
+Vite 会在终端显示访问地址。生产构建和本地预览：
+
+```bash
 npm run build
+npm run preview
 ```
 
-当前开发服务器默认地址：
+桌面调试使用 `npm run desktop`。该命令先构建页面，再启动 Electron；桌面窗口会连接程序内置的本地服务。
 
-```text
-http://127.0.0.1:5173/
+## 桌面打包
+
+| 平台 | 命令 | 输出 |
+| --- | --- | --- |
+| Windows x64 | `npm run dist:win` | `release/` 中的便携版和目录包 |
+| macOS x64 | `npm run dist:mac` | `release/` 中的 DMG |
+| macOS Universal | `npm run dist:mac:universal` | `release/` 中的 DMG |
+
+龙芯新世界（Linux loong64）使用社区构建的 Electron 42.3.0 运行时。在龙芯机器上执行：
+
+```bash
+npm ci --ignore-scripts
+npm run build
+npm run dist:loong64 -- /path/to/electron-v42.3.0-linux-loong64.zip
+./release/ham-checkin-0.9.1-linux-loong64/electron
 ```
 
-## FMO 候选流程
+`--ignore-scripts` 用于避开仅供 Windows 打包使用的 `electron-winstaller` 安装脚本。打包脚本会校验 Electron 压缩包的 SHA-256；运行时文件的来源和下载示例见 [龙芯桌面版说明](docs/loongarch-desktop-build.md)。目录名中的版本号取自 `package.json`，升级版本后应按实际目录名运行。
 
-1. 在右侧 `FMO 通联候选` 区填写 FMO 地址，例如 `192.168.40.3` 或 `fmo.example.net:40088`。
-2. 选择 `ws` 或 `wss` 协议。局域网设备通常使用 `ws`。
-3. 可选填写主控呼号，用于按 FMO 日志来源过滤最近通联。
-4. 点击刷新或开启自动刷新。
-5. 主控从候选中选择抄收清楚的友台，软件填入左侧表单。
-6. 主控确认 QTH、设备、功率、信号报告后点击 `加入点名表`。
+## 数据与导入
 
-FMO 数据只作为候选来源，不会自动写入点名记录。候选会优先使用 FMO 返回的 `qth/address/location/toAddress/city/province`；如果没有 QTH，则显示 `toGrid/grid`。设备会优先使用 FMO 返回的 `device/rig/radio/equipment`，并尝试从用户备注中识别设备文本。
+点名记录保存在当前应用地址的浏览器存储中，呼号档案保存在 IndexedDB；旧版档案数据会在首次加载时迁移。Electron 桌面版通过本机服务打开页面。更换浏览器、应用地址或用户数据目录时，原有数据不会自动跟随。
+
+导入 DB3：打开“数据库选项” → “导入 DB3”，选择旧软件的数据库文件。导入结果会加入呼号档案，供后续输入呼号时检索；不会把旧 `qsolog` 逐条加入当前活动的点名表。“整理档案并刷新候选索引”是单独的维护操作，日常点名不需要运行。
+
+JSON 导出只包含当前点名记录。要留存活动结果，请另行导出 Excel；不要把 JSON 备份当作完整呼号档案备份。
+
