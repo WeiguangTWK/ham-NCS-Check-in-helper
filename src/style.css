@@ -1427,6 +1427,40 @@ tbody tr:nth-child(even) {
   width: min(560px, calc(100vw - 36px));
 }
 
+.database-options-modal {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(20, 34, 28, 0.22);
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  width: min(620px, calc(100vw - 36px));
+}
+
+.database-options-modal .modal-head,
+.database-options-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.database-options-modal .modal-head {
+  justify-content: space-between;
+}
+
+.database-options-modal h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.database-options-count,
+.database-options-status {
+  color: var(--text);
+  margin: 0;
+}
+
 .about-modal .modal-head {
   align-items: center;
   display: flex;

@@ -117,6 +117,9 @@ const i18nMessages = {
     clearSearch: '清空搜索',
     exportExcel: '导出 Excel',
     importDb3: '导入 DB3',
+    databaseOptions: '数据库选项',
+    rebuildProfiles: '整理档案并刷新候选索引',
+    databaseOptionsHint: '导入旧版 DB3 后，呼号档案会立即可用。整理操作会重新规范化所有本地档案并刷新候选索引；日常点名无需执行。',
     selectAll: '全选',
     cancelSelect: '取消',
     deleteSelected: '删除选中',
@@ -225,6 +228,9 @@ const i18nMessages = {
     clearSearch: 'Clear search',
     exportExcel: 'Export Excel',
     importDb3: 'Import DB3',
+    databaseOptions: 'Database Options',
+    rebuildProfiles: 'Rebuild Profiles and Suggestions',
+    databaseOptionsHint: 'Imported DB3 profiles are available immediately. Rebuild normalizes all local profiles and refreshes suggestions; regular check-ins do not require it.',
     selectAll: 'Select All',
     cancelSelect: 'Cancel',
     deleteSelected: 'Delete selected',
@@ -380,6 +386,9 @@ const autoSaveTimer = ref(null)
 const serverSaveAvailable = ref(false)
 const authorQrOpen = ref(false)
 const aboutOpen = ref(false)
+const databaseOptionsOpen = ref(false)
+const databaseMaintenanceBusy = ref(false)
+const databaseStatus = ref('')
 const profileRegistrationOpen = ref(false)
 const systemClock = ref(new Date())
 const systemClockTimer = ref(null)
@@ -3164,10 +3173,42 @@ const forEachDb3Row = (db, tableName, visit, orderBy = '') => {
   }
 }
 
+const rebuildProfileDatabase = async () => {
+  if (databaseMaintenanceBusy.value) return
+  databaseMaintenanceBusy.value = true
+  databaseStatus.value = i18nText('正在整理呼号档案…', 'Rebuilding callsign profiles…')
+  await new Promise((resolve) => window.setTimeout(resolve, 0))
+  try {
+    const startedAt = performance.now()
+    const profileMap = new Map()
+    for (const source of toRaw(profiles.value)) {
+      const profile = normalizeProfile(source)
+      if (!profile.callsign) continue
+      const existing = profileMap.get(profile.callsign)
+      profileMap.set(profile.callsign, existing ? mergeProfileEntry(existing, profile) : profile)
+    }
+    profiles.value = [...profileMap.values()]
+    const indexedCallsigns = profileByCallsign.value.size
+    const indexedQths = qthSearchIndex.value.length
+    databaseStatus.value = i18nText(
+      `已整理 ${profileMap.size} 个呼号、${indexedQths} 个 QTH，耗时 ${Math.round(performance.now() - startedAt)} 毫秒`,
+      `Rebuilt ${profileMap.size} callsigns and ${indexedQths} QTH values in ${Math.round(performance.now() - startedAt)} ms`
+    )
+    console.info('Profile database rebuilt', { indexedCallsigns, indexedQths })
+  } catch (error) {
+    console.error(error)
+    databaseStatus.value = i18nText('档案整理失败', 'Profile rebuild failed')
+  } finally {
+    databaseMaintenanceBusy.value = false
+  }
+}
+
 const importDb3 = async (event) => {
   const file = event.target.files?.[0]
   if (!file) return
 
+  databaseMaintenanceBusy.value = true
+  databaseStatus.value = i18nText('正在导入 DB3…', 'Importing DB3…')
   try {
     const startedAt = performance.now()
     const SQL = await initSqlJs({ locateFile: () => sqlWasmUrl })
@@ -3224,10 +3265,13 @@ const importDb3 = async (event) => {
       callsigns: importedCallsigns.size
     })
     showNotice(i18nText(`已导入 ${importedCount} 条旧库资料，更新 ${importedCallsigns.size} 个呼号画像`, `Imported ${importedCount} legacy records and updated ${importedCallsigns.size} callsign profiles.`))
+    databaseStatus.value = i18nText(`已导入 ${importedCount} 条旧记录，更新 ${importedCallsigns.size} 个呼号`, `Imported ${importedCount} legacy records and updated ${importedCallsigns.size} callsigns`)
   } catch (error) {
     console.error(error)
     showNotice(i18nText('DB3 导入失败，请确认是该点名软件的数据库文件', 'DB3 import failed. Please use a database file from this check-in app.'))
+    databaseStatus.value = i18nText('DB3 导入失败', 'DB3 import failed')
   } finally {
+    databaseMaintenanceBusy.value = false
     event.target.value = ''
   }
 }
@@ -3725,9 +3769,9 @@ onUnmounted(() => {
                 <FileSpreadsheet :size="18" />
                 <span>Excel</span>
               </button>
-              <button type="button" class="tool-button" :title="t('importDb3')" @click="dbFileInput?.click()">
+              <button type="button" class="tool-button" :title="t('databaseOptions')" @click="databaseOptionsOpen = true">
                 <Upload :size="18" />
-                <span>{{ t('importDb3') }}</span>
+                <span>{{ t('databaseOptions') }}</span>
               </button>
               <button type="button" class="tool-button" :title="t('selectAll')" @click="toggleAllFilteredRecords">
                 <span>{{ allFilteredSelected ? t('cancelSelect') : t('selectAll') }}</span>
@@ -3736,7 +3780,6 @@ onUnmounted(() => {
                 <Trash2 :size="18" />
               </button>
               <input ref="fileInput" class="hidden-input" type="file" accept="application/json" @change="importJson" />
-              <input ref="dbFileInput" class="hidden-input" type="file" accept=".db3,.sqlite,.sqlite3" @change="importDb3" />
               <input
                 ref="profileKeyFileInput"
                 class="hidden-input"
@@ -4088,6 +4131,29 @@ onUnmounted(() => {
           </button>
         </div>
         <p class="modal-hint">{{ t('registerHint') }}</p>
+      </div>
+    </div>
+
+    <div v-if="databaseOptionsOpen" class="modal-backdrop" @click.self="databaseOptionsOpen = false">
+      <div class="database-options-modal">
+        <div class="modal-head">
+          <h2>{{ t('databaseOptions') }}</h2>
+          <button type="button" class="icon-button" :title="t('close')" @click="databaseOptionsOpen = false">X</button>
+        </div>
+        <p class="modal-hint">{{ t('databaseOptionsHint') }}</p>
+        <p class="database-options-count">{{ i18nText(`本地呼号档案 ${profiles.length} 个`, `${profiles.length} local callsign profiles`) }}</p>
+        <div class="database-options-actions">
+          <button type="button" class="tool-button" :disabled="databaseMaintenanceBusy" @click="dbFileInput?.click()">
+            <Upload :size="18" />
+            {{ t('importDb3') }}
+          </button>
+          <button type="button" class="tool-button" :disabled="databaseMaintenanceBusy || !profiles.length" @click="rebuildProfileDatabase">
+            <RefreshCw :size="18" />
+            {{ t('rebuildProfiles') }}
+          </button>
+          <input ref="dbFileInput" class="hidden-input" type="file" accept=".db3,.sqlite,.sqlite3" @change="importDb3" />
+        </div>
+        <p v-if="databaseStatus" class="database-options-status" role="status">{{ databaseStatus }}</p>
       </div>
     </div>
 
