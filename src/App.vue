@@ -755,6 +755,17 @@ const profileByCallsign = computed(() => {
   return map
 })
 
+const profilesByCoreCallsign = computed(() => {
+  const map = new Map()
+  for (const profile of profileByCallsign.value.values()) {
+    const core = getCoreCallsign(profile.callsign)
+    if (!core) continue
+    if (!map.has(core)) map.set(core, [])
+    map.get(core).push(profile)
+  }
+  return map
+})
+
 const currentProfile = computed(() => {
   const exactCallsign = buildRecordCallsign()
   const plainCallsign = normalizeCallsign(form.callsign)
@@ -764,9 +775,7 @@ const currentProfile = computed(() => {
     profileByCallsign.value.get(plainCallsign)
   if (!coreCallsign) return exactProfile || null
 
-  const matchingProfiles = [...profileByCallsign.value.values()].filter((profile) =>
-    isSameCoreCallsign(profile.callsign, coreCallsign)
-  )
+  const matchingProfiles = profilesByCoreCallsign.value.get(coreCallsign) || []
   const orderedProfiles = [
     exactProfile,
     ...matchingProfiles.filter((profile) => profile.callsign !== exactProfile?.callsign)
@@ -837,6 +846,10 @@ const collectKnownValues = (key) =>
     .map((value) => String(value).trim())
     .filter(Boolean)
 
+const allKnownValues = computed(() =>
+  Object.fromEntries(profileFields.map((key) => [key, collectKnownValues(key)]))
+)
+
 const filterValuesByInput = (values, keyword, limit = 24) => {
   const normalizedKeyword = toHalfWidth(keyword).toLowerCase().replace(/\s+/g, '')
   const uniqueValues = uniqueRecentValues(values, values.length || limit)
@@ -857,9 +870,14 @@ const collectKnownCallsigns = () =>
     .map(getCoreCallsign)
     .filter(Boolean)
 
+const allKnownCallsigns = computed(() => {
+  const callsigns = collectKnownCallsigns()
+  return uniqueRecentValues(callsigns, callsigns.length || 400)
+})
+
 const callsignSuggestions = computed(() => {
   const keyword = toHalfWidth(form.callsign).toUpperCase().replace(/\s+/g, '')
-  const uniqueCallsigns = uniqueRecentValues(collectKnownCallsigns(), collectKnownCallsigns().length || 400)
+  const uniqueCallsigns = allKnownCallsigns.value
   if (!keyword) return uniqueCallsigns.slice(0, 24)
   return uniqueCallsigns
     .filter((callsign) => callsign.includes(keyword))
@@ -873,7 +891,7 @@ const callsignSuggestions = computed(() => {
 })
 
 const knownValues = computed(() => {
-  const valuesFor = (key) => uniqueRecentValues(collectKnownValues(key), 80).reverse()
+  const valuesFor = (key) => uniqueRecentValues(allKnownValues.value[key], 80).reverse()
 
   return {
     qth: valuesFor('qth'),
@@ -897,12 +915,12 @@ const currentKnownValues = computed(() => {
 
 const getSearchableKnownValues = (key, target = form) => {
   const currentValues = currentKnownValues.value[key] || []
-  const globalValues = collectKnownValues(key)
   const keyword = target[key]
   const hasKeyword = Boolean(toHalfWidth(keyword).trim())
   const currentMatches = filterValuesByInput(currentValues, keyword, 24)
-  const globalMatches = filterValuesByInput(globalValues, keyword, 120)
   if (buildRecordCallsign() && !hasKeyword) return currentMatches
+  const globalValues = allKnownValues.value[key]
+  const globalMatches = filterValuesByInput(globalValues, keyword, 120)
   if (buildRecordCallsign()) return uniqueRecentValues([...currentMatches, ...globalMatches], 24)
   return globalMatches.slice(0, 24)
 }
@@ -3076,15 +3094,15 @@ const importJson = async (event) => {
   }
 }
 
-const tableRows = (db, tableName) => {
+const forEachDb3Row = (db, tableName, visit, orderBy = '') => {
   const exists = db.exec(`select name from sqlite_master where type='table' and name='${tableName}'`)
-  if (!exists.length || !exists[0].values.length) return []
-  const result = db.exec(`select * from ${tableName}`)
-  if (!result.length) return []
-  const columns = result[0].columns
-  return result[0].values.map((values) =>
-    Object.fromEntries(columns.map((column, index) => [column, values[index]]))
-  )
+  if (!exists.length || !exists[0].values.length) return
+  const statement = db.prepare(`select * from ${tableName}${orderBy}`)
+  try {
+    while (statement.step()) visit(statement.getAsObject())
+  } finally {
+    statement.free()
+  }
 }
 
 const importDb3 = async (event) => {
@@ -3092,52 +3110,61 @@ const importDb3 = async (event) => {
   if (!file) return
 
   try {
+    const startedAt = performance.now()
     const SQL = await initSqlJs({ locateFile: () => sqlWasmUrl })
     const buffer = await file.arrayBuffer()
     const db = new SQL.Database(new Uint8Array(buffer))
-    const qsoRows = tableRows(db, 'qsolog')
-    const qthRows = tableRows(db, 'qth')
-    const importedRecords = qsoRows
-      .sort((a, b) => Number(a.ID || 0) - Number(b.ID || 0))
-      .map((row) => {
-      const rx = row.rst || ''
-      const tx = row.rst1 || ''
-      const signal = rx || tx ? `RX ${rx || '-'} / TX ${tx || '-'}` : ''
-      return {
-        id: `legacy-${file.name}-${row.ID || crypto.randomUUID()}`,
-        callsign: normalizeCallsign(row.callsign || ''),
-        operatorName: '',
-        time: parseLegacyTime(row.qsotime),
-        qth: row.qth || '',
-        device: row.rig || '',
-        antenna: row.ant || '',
-        power: row.power || '',
-        frequency: row.freq || '',
-        mode: row.modal || '',
-        signal,
-        remarks: [row.linetype, row.lineother, row.op ? i18nText(`主控 ${row.op}`, `OP ${row.op}`) : '', row.fwq].filter(Boolean).join(' / '),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    })
-
-    const qthProfiles = qthRows.map((row) => ({
-      callsign: normalizeCallsign(row.callsign || ''),
-      qth: row.qth || '',
-      updatedAt: new Date().toISOString()
-    }))
-    const recordProfiles = importedRecords.map((record) => ({
-      ...record,
-      lastCheckinAt: record.time
-    }))
-
-    const profileEntries = [...qthProfiles, ...recordProfiles].filter((profile) => profile.callsign)
-    mergeProfiles(profileEntries)
-    markProfileDirty(profileEntries.map((profile) => profile.callsign))
+    const openedAt = performance.now()
+    let importedCount = 0
+    const importedCallsigns = new Set()
+    const profileMap = new Map(
+      profiles.value
+        .map(normalizeProfile)
+        .filter((profile) => profile.callsign)
+        .map((profile) => [profile.callsign, profile])
+    )
+    const addProfile = (profile) => {
+      const callsign = normalizeCallsign(profile.callsign || '')
+      if (!callsign) return
+      profileMap.set(callsign, mergeProfileEntry(profileMap.get(callsign), profile))
+      importedCallsigns.add(callsign)
+    }
+    try {
+      forEachDb3Row(db, 'qth', (row) => {
+        addProfile({ callsign: row.callsign, qth: row.qth || '' })
+      })
+      forEachDb3Row(db, 'qsolog', (row) => {
+        importedCount += 1
+        const rx = row.rst || ''
+        const tx = row.rst1 || ''
+        addProfile({
+          callsign: row.callsign,
+          time: parseLegacyTime(row.qsotime),
+          qth: row.qth || '',
+          device: row.rig || '',
+          antenna: row.ant || '',
+          power: row.power || '',
+          mode: row.modal || '',
+          signal: rx || tx ? `RX ${rx || '-'} / TX ${tx || '-'}` : '',
+          remarks: [row.linetype, row.lineother, row.op ? i18nText(`主控 ${row.op}`, `OP ${row.op}`) : '', row.fwq].filter(Boolean).join(' / ')
+        })
+      }, ' order by ID')
+    } finally {
+      db.close()
+    }
+    const mergedAt = performance.now()
+    profiles.value = [...profileMap.values()]
+    markProfileDirty([...importedCallsigns])
     scheduleSharedProfileSync()
-    db.close()
-    const callsignCount = new Set(profileEntries.map((profile) => profile.callsign).filter(Boolean)).size
-    showNotice(i18nText(`已导入 ${importedRecords.length} 条旧库资料，更新 ${callsignCount} 个呼号画像`, `Imported ${importedRecords.length} legacy records and updated ${callsignCount} callsign profiles.`))
+    console.info('DB3 import timing', {
+      fileMiB: Number((file.size / 1048576).toFixed(1)),
+      openMs: Math.round(openedAt - startedAt),
+      mergeMs: Math.round(mergedAt - openedAt),
+      totalMs: Math.round(performance.now() - startedAt),
+      rows: importedCount,
+      callsigns: importedCallsigns.size
+    })
+    showNotice(i18nText(`已导入 ${importedCount} 条旧库资料，更新 ${importedCallsigns.size} 个呼号画像`, `Imported ${importedCount} legacy records and updated ${importedCallsigns.size} callsign profiles.`))
   } catch (error) {
     console.error(error)
     showNotice(i18nText('DB3 导入失败，请确认是该点名软件的数据库文件', 'DB3 import failed. Please use a database file from this check-in app.'))
